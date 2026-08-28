@@ -76,14 +76,29 @@ export function createCard(input: {
   idempotencyKey?: string
 }):
   | { card: Card; fullNumber: string; replayed: false }
-  | { card: Card; replayed: true } {
+  | { card: Card; replayed: true }
+  | { conflict: true } {
   const { idempotencyKey } = input
 
+  // What this key was used for. A key retried with the same body is a replay;
+  // a key reused for a different card is a caller bug, and answering it with
+  // the original card would silently hand back the wrong record.
+  const fingerprint = JSON.stringify([
+    input.nickname,
+    input.merchantId,
+    input.spendLimit,
+    input.currency,
+    input.categoryLock,
+  ])
+
   if (idempotencyKey) {
-    const seenId = store.cardIdempotency[idempotencyKey]
-    const seen = seenId ? cardById(seenId) : undefined
-    // A replay answers with the record and no number. The reveal already happened.
-    if (seen) return { card: seen, replayed: true }
+    const seen = store.cardIdempotency[idempotencyKey]
+    if (seen) {
+      if (seen.fingerprint !== fingerprint) return { conflict: true }
+      const card = cardById(seen.cardId)
+      // A replay answers with the record and no number. The reveal already happened.
+      if (card) return { card, replayed: true }
+    }
   }
 
   const fullNumber = generateCardNumber()
@@ -105,7 +120,9 @@ export function createCard(input: {
 
   store.cards.push(card)
   appendEvent(card.id, "issued", createdAt)
-  if (idempotencyKey) store.cardIdempotency[idempotencyKey] = card.id
+  if (idempotencyKey) {
+    store.cardIdempotency[idempotencyKey] = { cardId: card.id, fingerprint }
+  }
 
   return { card, fullNumber, replayed: false }
 }

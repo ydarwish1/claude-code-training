@@ -107,6 +107,15 @@ export async function POST(request: NextRequest) {
   })
 
   // A replay is not a creation, and it carries no number.
+  if ("conflict" in result) {
+    return NextResponse.json(
+      {
+        message:
+          "This idempotency key was already used for a different request. Use a fresh key to issue another card.",
+      },
+      { status: 409 },
+    )
+  }
   if (result.replayed) return NextResponse.json(result)
   return NextResponse.json(result, { status: 201 })
 }

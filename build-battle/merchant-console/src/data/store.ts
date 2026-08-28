@@ -22,7 +22,7 @@ interface Store {
   cards: Card[]
   cardEvents: CardEvent[]
   /** Idempotency key to the card it created. A replay never re-reveals a number. */
-  cardIdempotency: Record<string, string>
+  cardIdempotency: Record<string, { cardId: string; fingerprint: string }>
 }
 
 declare global {
