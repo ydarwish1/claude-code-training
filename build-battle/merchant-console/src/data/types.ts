@@ -71,6 +71,46 @@ export interface Payout {
   paymentIds: string[]
 }
 
+export type CardStatus = "active" | "frozen" | "cancelled"
+
+export type CardCategory =
+  | "advertising"
+  | "software"
+  | "shipping"
+  | "travel"
+  | "office"
+  | "contractors"
+
+export interface Card {
+  id: string
+  merchantId: string
+  nickname: string
+  last4: string
+  /** Reference to the generated number, never the number. */
+  numberRef: string
+  /** Integer minor units. Never a float. */
+  spendLimit: number
+  /** Integer minor units. Never a float. */
+  spent: number
+  currency: Currency
+  status: CardStatus
+  categoryLock: CardCategory | null
+  /** ISO 8601, always UTC. */
+  createdAt: string
+}
+
+export type CardEventType = "issued" | "frozen" | "unfrozen" | "cancelled"
+
+/** Append-only audit trail. What happened to a card is never rewritten. */
+export interface CardEvent {
+  id: string
+  cardId: string
+  type: CardEventType
+  /** ISO 8601, always UTC. */
+  at: string
+  detail?: string
+}
+
 export interface PaymentFilters {
   status?: PaymentStatus | "all"
   merchantId?: string

@@ -1,5 +1,11 @@
-import { merchants } from "./merchants"
+import { CARD_BIN, luhnCheckDigit } from "@/lib/cards"
+import { merchantById, merchants } from "./merchants"
 import {
+  Card,
+  CardCategory,
+  CardEvent,
+  CardEventType,
+  CardStatus,
   Currency,
   Dispute,
   Payment,
@@ -149,6 +155,142 @@ export function generate() {
 
   const payouts = generatePayouts(payments)
   return { payments, refunds, disputes, payouts }
+}
+
+const CARD_SEED = 20260814
+
+/**
+ * Cards are blueprinted rather than rolled: the mix of statuses, the card
+ * sitting past 80% of its limit, and the one nobody has spent against yet are
+ * the cases the console has to render, so they are chosen, not hoped for.
+ */
+const CARD_BLUEPRINTS: readonly {
+  merchantId: string
+  nickname: string
+  categoryLock: CardCategory
+  status: CardStatus
+  /** Fraction of the limit already spent. */
+  spentRatio: number
+  detail?: string
+}[] = [
+  {
+    merchantId: "mch_01",
+    nickname: "Meta Ads Q3",
+    categoryLock: "advertising",
+    status: "active",
+    spentRatio: 0.86,
+  },
+  {
+    merchantId: "mch_04",
+    nickname: "Design tool seats",
+    categoryLock: "software",
+    status: "active",
+    spentRatio: 0.34,
+  },
+  {
+    merchantId: "mch_05",
+    nickname: "Courier account",
+    categoryLock: "shipping",
+    status: "frozen",
+    spentRatio: 0.52,
+    detail: "Frozen by ops while the courier contract is under review.",
+  },
+  {
+    merchantId: "mch_07",
+    nickname: "Contractor onboarding",
+    categoryLock: "contractors",
+    status: "active",
+    spentRatio: 0,
+  },
+  {
+    merchantId: "mch_09",
+    nickname: "Trade show travel",
+    categoryLock: "travel",
+    status: "cancelled",
+    spentRatio: 0.61,
+    detail: "Cancelled once the trade show closed.",
+  },
+  {
+    merchantId: "mch_02",
+    nickname: "Office supplies",
+    categoryLock: "office",
+    status: "active",
+    spentRatio: 0.18,
+  },
+]
+
+/**
+ * Seed cards and their audit trail. Deterministic like everything else here,
+ * and it stores only a last four and a reference: a full number is revealed
+ * once at creation and never persisted, seeds least of all.
+ */
+export function seedCards(): { cards: Card[]; cardEvents: CardEvent[] } {
+  // Its own generator, so the payment stream above stays byte-identical
+  // whatever order the store seeds its collections in.
+  const cardRand = mulberry32(CARD_SEED)
+  const roll = (min: number, max: number) =>
+    Math.floor(cardRand() * (max - min + 1)) + min
+  const hex = (length: number) =>
+    Array.from({ length }, () => roll(0, 15).toString(16)).join("")
+
+  const cards: Card[] = []
+  const cardEvents: CardEvent[] = []
+  let cardSeq = 0
+  let eventSeq = 0
+
+  const logEvent = (
+    cardId: string,
+    type: CardEventType,
+    at: string,
+    detail?: string,
+  ) => {
+    const event: CardEvent = { id: `cev_${pad(++eventSeq)}`, cardId, type, at }
+    if (detail) event.detail = detail
+    cardEvents.push(event)
+  }
+
+  for (const blueprint of CARD_BLUEPRINTS) {
+    const merchant = merchantById(blueprint.merchantId)!
+
+    const ageDays = roll(6, 90)
+    const createdAt = new Date(GENERATED_AT)
+    createdAt.setUTCDate(createdAt.getUTCDate() - ageDays)
+    createdAt.setUTCHours(roll(8, 19), roll(0, 59), 0, 0)
+
+    // Build a real 4242 number for its last four, then drop it on the floor.
+    let generated = CARD_BIN
+    while (generated.length < 15) generated += String(roll(0, 9))
+    generated += luhnCheckDigit(generated)
+
+    const spendLimit = roll(5, 250) * 10_000
+
+    const card: Card = {
+      id: `card_${pad(++cardSeq)}`,
+      merchantId: merchant.id,
+      nickname: blueprint.nickname,
+      last4: generated.slice(-4),
+      numberRef: `cardnum_${hex(12)}`,
+      spendLimit,
+      spent: Math.round(spendLimit * blueprint.spentRatio),
+      // A card is always in its merchant's own currency.
+      currency: merchant.currency,
+      status: blueprint.status,
+      categoryLock: blueprint.categoryLock,
+      createdAt: createdAt.toISOString(),
+    }
+    cards.push(card)
+
+    logEvent(card.id, "issued", card.createdAt)
+
+    if (blueprint.status !== "active") {
+      const at = new Date(
+        createdAt.getTime() + roll(1, Math.floor(ageDays / 2)) * 86_400_000,
+      ).toISOString()
+      logEvent(card.id, blueprint.status, at, blueprint.detail)
+    }
+  }
+
+  return { cards, cardEvents }
 }
 
 function generatePayouts(payments: Payment[]): Payout[] {

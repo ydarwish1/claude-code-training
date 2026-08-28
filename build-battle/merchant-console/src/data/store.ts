@@ -1,6 +1,6 @@
-import { generate } from "./generate"
+import { generate, seedCards } from "./generate"
 import { merchants } from "./merchants"
-import { Dispute, Payment, Payout, Refund } from "./types"
+import { Card, CardEvent, Dispute, Payment, Payout, Refund } from "./types"
 
 /**
  * In-memory store.
@@ -19,6 +19,10 @@ interface Store {
   refunds: Refund[]
   disputes: Dispute[]
   payouts: Payout[]
+  cards: Card[]
+  cardEvents: CardEvent[]
+  /** Idempotency key to the card it created. A replay never re-reveals a number. */
+  cardIdempotency: Record<string, string>
 }
 
 declare global {
@@ -28,10 +32,32 @@ declare global {
 
 function createStore(): Store {
   const { payments, refunds, disputes, payouts } = generate()
-  return { merchants, payments, refunds, disputes, payouts }
+  const { cards, cardEvents } = seedCards()
+  return {
+    merchants,
+    payments,
+    refunds,
+    disputes,
+    payouts,
+    cards,
+    cardEvents,
+    cardIdempotency: {},
+  }
 }
 
 export const store: Store = globalThis.__northwindStore ?? createStore()
+
+/**
+ * A dev server that was already running before NWP-201 holds a store with no
+ * card collections on it. Fill them in rather than let a route read undefined.
+ */
+const carried = store as Partial<Store>
+if (!carried.cards || !carried.cardEvents || !carried.cardIdempotency) {
+  const { cards, cardEvents } = seedCards()
+  carried.cards ??= cards
+  carried.cardEvents ??= cardEvents
+  carried.cardIdempotency ??= {}
+}
 
 if (process.env.NODE_ENV !== "production") {
   globalThis.__northwindStore = store
