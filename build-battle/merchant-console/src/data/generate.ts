@@ -74,9 +74,18 @@ function statusFor(): PaymentStatus {
   return "disputed"
 }
 
+/**
+ * The most recent run. seedCards() derives card spend from it rather than
+ * paying for a second full generation at boot; because generate() reseeds per
+ * call, a cache miss and a fresh run produce identical records either way.
+ */
+let lastRun:
+  | { payments: Payment[]; refunds: Refund[]; disputes: Dispute[]; payouts: Payout[] }
+  | undefined
+
 export function generate() {
   // Reseeded per call, so every call replays the same records rather than
-  // continuing the stream. seedCards() reads this back to derive card spend.
+  // continuing the stream.
   rand = mulberry32(SEED)
 
   const payments: Payment[] = []
@@ -160,7 +169,8 @@ export function generate() {
   }
 
   const payouts = generatePayouts(payments)
-  return { payments, refunds, disputes, payouts }
+  lastRun = { payments, refunds, disputes, payouts }
+  return lastRun
 }
 
 const CARD_SEED = 20260814
@@ -258,9 +268,11 @@ export function seedCards(): { cards: Card[]; cardEvents: CardEvent[] } {
   // Its own generator, so the payment stream above stays byte-identical
   // whatever order the store seeds its collections in.
   const cardRand = mulberry32(CARD_SEED)
-  // The same records the store holds: generate() replays its stream on every
-  // call, so a card's spend and the payments list can never disagree.
-  const { payments } = generate()
+  // The same records the store holds, from the cached run when the store has
+  // already generated one — spend derivation costs no second generation. On a
+  // cold call generate() runs once here; either way the records are identical,
+  // so a card's spend and the payments list can never disagree.
+  const { payments } = lastRun ?? generate()
   const roll = (min: number, max: number) =>
     Math.floor(cardRand() * (max - min + 1)) + min
   const hex = (length: number) =>
