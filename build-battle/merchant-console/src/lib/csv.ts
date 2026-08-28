@@ -1,5 +1,5 @@
 import { merchantById } from "@/data/merchants"
-import { Payment, PaymentStatus } from "@/data/types"
+import { Payment, PaymentFilters } from "@/data/types"
 import { formatMoney } from "./money"
 
 /**
@@ -104,28 +104,60 @@ export function toCsv(
 /** Which rows the file holds: the table's current filter, or every payment. */
 export type ExportScope = "filter" | "all"
 
-/** The scope word in the filename. A closed set, never raw client input. */
-export type ExportLabel = PaymentStatus | "all" | "filtered"
+/**
+ * The scope words in the filename.
+ *
+ * Assembled only from validated filter values and merchant names this server
+ * already holds. Raw client input never reaches it — see exportLabel.
+ */
+export type ExportLabel = string
 
 export function parseScope(param: string | null): ExportScope {
   return param === "all" ? "all" : "filter"
 }
 
+/** Lowercase letters, digits and single hyphens. A filename holds nothing else. */
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
 /**
- * The word that tells ops what is in the file without opening it.
+ * The words that tell ops what is in the file without opening it.
  *
- * Scoped to everything, it is "all". Scoped to the table's filter, it is the
- * status being filtered on, because that is the distinction that matters when
- * a file is going to a merchant — falling back to "filtered" when no status is
- * picked.
+ * Every filter that narrowed the file gets a segment. A name that
+ * under-describes its contents is the near-miss this ticket exists to remove:
+ * a file called "disputed" that in fact holds one merchant's disputes reads as
+ * safe to send to a different merchant.
+ *
+ * A file that nothing narrowed is called "all", whichever way the scope radio
+ * was set, because that is what it holds.
  */
 export function exportLabel(
   scope: ExportScope,
-  status: PaymentStatus | "all" | undefined,
+  filters: PaymentFilters,
 ): ExportLabel {
   if (scope === "all") return "all"
-  if (status && status !== "all") return status
-  return "filtered"
+
+  const segments: string[] = []
+
+  if (filters.status && filters.status !== "all") segments.push(filters.status)
+
+  if (filters.merchantId) {
+    // Only a merchant this server knows about is named. An unrecognised id is
+    // client input and never gets interpolated into a filename.
+    const name = merchantById(filters.merchantId)?.name
+    const slug = name ? slugify(name) : ""
+    if (slug) segments.push(slug)
+  }
+
+  if (filters.search || filters.from || filters.to) segments.push("filtered")
+
+  if (segments.length === 0) return "all"
+
+  return segments.join("-")
 }
 
 export function exportFilename(

@@ -36,7 +36,7 @@ export function GET(request: NextRequest) {
     filters.direction,
   )
 
-  const filename = exportFilename(exportLabel(scope, filters.status))
+  const filename = exportFilename(exportLabel(scope, filters))
 
   return new Response(toCsv(rows, columns), {
     headers: {

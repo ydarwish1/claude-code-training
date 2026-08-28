@@ -129,18 +129,52 @@ describe("parseScope", () => {
 })
 
 describe("exportLabel", () => {
-  it("names the status when the file is scoped to a filtered table", () => {
-    expect(exportLabel("filter", "disputed")).toBe("disputed")
+  it("names the status when the table is filtered by one", () => {
+    expect(exportLabel("filter", { status: "disputed" })).toBe("disputed")
   })
 
-  it("says 'filtered' when the table is filtered by something other than status", () => {
-    expect(exportLabel("filter", "all")).toBe("filtered")
-    expect(exportLabel("filter", undefined)).toBe("filtered")
+  it("says 'all' when nothing narrowed the file, whatever the radio said", () => {
+    expect(exportLabel("filter", {})).toBe("all")
+    expect(exportLabel("filter", { status: "all" })).toBe("all")
   })
 
   it("says 'all' whenever the scope is every payment, whatever the filter was", () => {
-    expect(exportLabel("all", "disputed")).toBe("all")
-    expect(exportLabel("all", "all")).toBe("all")
+    expect(exportLabel("all", { status: "disputed" })).toBe("all")
+    expect(exportLabel("all", { merchantId: "mch_02" })).toBe("all")
+  })
+
+  it("names the merchant, so a one-merchant file cannot look like the table", () => {
+    expect(exportLabel("filter", { merchantId: "mch_02" })).toBe(
+      "kestrel-outdoor-supply",
+    )
+    expect(
+      exportLabel("filter", { status: "disputed", merchantId: "mch_02" }),
+    ).toBe("disputed-kestrel-outdoor-supply")
+  })
+
+  it("never puts an unrecognised merchant id in the filename", () => {
+    expect(exportLabel("filter", { merchantId: "../../etc/passwd" })).toBe("all")
+    expect(
+      exportLabel("filter", { status: "disputed", merchantId: "mch_99" }),
+    ).toBe("disputed")
+  })
+
+  it("says 'filtered' for the filters that have no name of their own", () => {
+    expect(exportLabel("filter", { search: "coffee" })).toBe("filtered")
+    expect(exportLabel("filter", { from: "2026-06-01" })).toBe("filtered")
+    expect(
+      exportLabel("filter", { status: "disputed", to: "2026-07-01" }),
+    ).toBe("disputed-filtered")
+  })
+
+  it("produces a label a filename can hold, whatever the segments were", () => {
+    expect(
+      exportLabel("filter", {
+        status: "disputed",
+        merchantId: "mch_02",
+        search: "x",
+      }),
+    ).toMatch(/^[a-z0-9-]+$/)
   })
 })
 
