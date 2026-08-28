@@ -13,8 +13,8 @@ import {
 /**
  * The export is the file ops hands to a merchant, so a broken cell is a
  * support ticket rather than a stack trace. These tests pin the escaping and
- * the column contract; NWP-101 changes which columns ship, not how a cell is
- * written, and these should still pass afterwards.
+ * the column contract; NWP-101 changed which columns ship, not how a cell is
+ * written, and these still pass.
  */
 
 const payment: Payment = {
