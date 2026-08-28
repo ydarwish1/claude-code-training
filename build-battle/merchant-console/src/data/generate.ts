@@ -1,4 +1,5 @@
 import { CARD_BIN, luhnCheckDigit } from "@/lib/cards"
+import { sumMinorUnits } from "@/lib/money"
 import { merchantById, merchants } from "./merchants"
 import {
   Card,
@@ -8,6 +9,7 @@ import {
   CardStatus,
   Currency,
   Dispute,
+  Merchant,
   Payment,
   PaymentStatus,
   Payout,
@@ -34,7 +36,7 @@ function mulberry32(a: number) {
   }
 }
 
-const rand = mulberry32(SEED)
+let rand = mulberry32(SEED)
 const pick = <T>(items: readonly T[]): T =>
   items[Math.floor(rand() * items.length)]
 const between = (min: number, max: number) =>
@@ -73,6 +75,10 @@ function statusFor(): PaymentStatus {
 }
 
 export function generate() {
+  // Reseeded per call, so every call replays the same records rather than
+  // continuing the stream. seedCards() reads this back to derive card spend.
+  rand = mulberry32(SEED)
+
   const payments: Payment[] = []
   const refunds: Refund[] = []
   const disputes: Dispute[] = []
@@ -163,14 +169,17 @@ const CARD_SEED = 20260814
  * Cards are blueprinted rather than rolled: the mix of statuses, the card
  * sitting past 80% of its limit, and the one nobody has spent against yet are
  * the cases the console has to render, so they are chosen, not hoped for.
+ *
+ * What a card has spent is not stated here. A blueprint says how many of its
+ * merchant's own captured payments ran on the card; the amount is their sum.
  */
 const CARD_BLUEPRINTS: readonly {
   merchantId: string
   nickname: string
   categoryLock: CardCategory
   status: CardStatus
-  /** Fraction of the limit already spent. */
-  spentRatio: number
+  /** How many of this merchant's captured payments this card paid for. */
+  charges: number
   detail?: string
 }[] = [
   {
@@ -178,21 +187,22 @@ const CARD_BLUEPRINTS: readonly {
     nickname: "Meta Ads Q3",
     categoryLock: "advertising",
     status: "active",
-    spentRatio: 0.86,
+    // Enough of Lumen's ad spend to put this card past 80% of its limit.
+    charges: 33,
   },
   {
     merchantId: "mch_04",
     nickname: "Design tool seats",
     categoryLock: "software",
     status: "active",
-    spentRatio: 0.34,
+    charges: 14,
   },
   {
     merchantId: "mch_05",
     nickname: "Courier account",
     categoryLock: "shipping",
     status: "frozen",
-    spentRatio: 0.52,
+    charges: 41,
     detail: "Frozen by ops while the courier contract is under review.",
   },
   {
@@ -200,14 +210,15 @@ const CARD_BLUEPRINTS: readonly {
     nickname: "Contractor onboarding",
     categoryLock: "contractors",
     status: "active",
-    spentRatio: 0,
+    // Issued and never used: the empty state has to render too.
+    charges: 0,
   },
   {
     merchantId: "mch_09",
     nickname: "Trade show travel",
     categoryLock: "travel",
     status: "cancelled",
-    spentRatio: 0.61,
+    charges: 33,
     detail: "Cancelled once the trade show closed.",
   },
   {
@@ -215,9 +226,28 @@ const CARD_BLUEPRINTS: readonly {
     nickname: "Office supplies",
     categoryLock: "office",
     status: "active",
-    spentRatio: 0.18,
+    charges: 4,
   },
 ]
+
+/**
+ * A merchant's captured payments, oldest first. Currency is filtered as well as
+ * merchant: amounts only sum with amounts in their own currency, however right
+ * the total looks.
+ */
+function capturedFor(payments: Payment[], merchant: Merchant): Payment[] {
+  return payments
+    .filter(
+      (payment) =>
+        payment.merchantId === merchant.id &&
+        payment.status === "captured" &&
+        payment.currency === merchant.currency,
+    )
+    .sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+    )
+}
 
 /**
  * Seed cards and their audit trail. Deterministic like everything else here,
@@ -228,6 +258,9 @@ export function seedCards(): { cards: Card[]; cardEvents: CardEvent[] } {
   // Its own generator, so the payment stream above stays byte-identical
   // whatever order the store seeds its collections in.
   const cardRand = mulberry32(CARD_SEED)
+  // The same records the store holds: generate() replays its stream on every
+  // call, so a card's spend and the payments list can never disagree.
+  const { payments } = generate()
   const roll = (min: number, max: number) =>
     Math.floor(cardRand() * (max - min + 1)) + min
   const hex = (length: number) =>
@@ -264,6 +297,18 @@ export function seedCards(): { cards: Card[]; cardEvents: CardEvent[] } {
 
     const spendLimit = roll(5, 250) * 10_000
 
+    // Spend is a real subset of this merchant's captured payments rather than a
+    // stated fraction of the limit, so the number reconciles against records
+    // that exist in the store. Charges land oldest first, and one the remaining
+    // limit cannot cover is declined the way the live card would decline it,
+    // which is also what keeps spent at or under spendLimit.
+    const charged: number[] = []
+    for (const payment of capturedFor(payments, merchant)) {
+      if (charged.length === blueprint.charges) break
+      if (sumMinorUnits([...charged, payment.amount]) > spendLimit) continue
+      charged.push(payment.amount)
+    }
+
     const card: Card = {
       id: `card_${pad(++cardSeq)}`,
       merchantId: merchant.id,
@@ -271,7 +316,7 @@ export function seedCards(): { cards: Card[]; cardEvents: CardEvent[] } {
       last4: generated.slice(-4),
       numberRef: `cardnum_${hex(12)}`,
       spendLimit,
-      spent: Math.round(spendLimit * blueprint.spentRatio),
+      spent: sumMinorUnits(charged),
       // A card is always in its merchant's own currency.
       currency: merchant.currency,
       status: blueprint.status,
